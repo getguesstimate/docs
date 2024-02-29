@@ -1,0 +1,21 @@
+import { HomepageFeatures } from '../components/HomepageFeatures';
+
+export function HomepageHeader() {
+return (
+<header className="p-8 bg-[#edf7ff]">
+<div className="flex flex-col items-center">
+<img alt="Squiggle logo" src="/img/guesstimate-logo.png" width={400} />
+<p className="my-4 max-w-md font-lora text-2xl text-slate-800 font-semibold text-center leading-relaxed">
+A spreadsheet for things that aren’t certain
+</p>
+</div>
+</header>
+);
+}
+
+<div className="min-h-[calc(100vh-var(--nextra-navbar-height)-200px)]">
+  <HomepageHeader />
+  <main>
+    <HomepageFeatures />
+  </main>
+</div>

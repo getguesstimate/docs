@@ -1,0 +1,30 @@
+@import url("https://fonts.googleapis.com/css2?family=Lato:wght@100;400;700;900&family=Lora:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Over-ride padding from Nextra for Components code renderer */
+.prose pre:not([data-theme]) {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.prose pre code .line,
+pre:not([data-theme]) {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+.prose pre:not([data-theme]) code {
+  font-size: 0.85rem;
+}
+
+/* These styles were getting in the way of the playground focus elements. */
+[tabindex]:not([tabindex="-1"]):focus-visible:focus {
+  @apply ring-0 ring-offset-0;
+}
+
+button:focus-visible:focus {
+  @apply ring-0 ring-offset-0;
+}

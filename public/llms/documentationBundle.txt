@@ -1,0 +1,4987 @@
+# Squiggle Documentation, One Page
+This file is auto-generated from the documentation files in the Squiggle repository. It includes our Peggy Grammar. It is meant to be given to an LLM. It is not meant to be read by humans.
+--- 
+
+
+## Peggy Grammar 
+
+ // Documentation: https://peggyjs.org/documentation.html
+
+{{
+  import * as h from './peggyHelpers.js';
+}}
+
+start
+  = _nl start:outerBlock _nl finalComment?
+    { return start; }
+
+zeroOMoreArgumentsBlockOrExpression = lambda / innerBlockOrExpression
+
+outerBlock
+  = imports:importStatementsList
+    statements:statementsList
+    finalExpression:(statementSeparator @expression)?
+    {
+      if (finalExpression) {
+        statements.push(finalExpression);
+      }
+      return h.nodeProgram(imports, statements, location());
+    }
+  / imports:importStatementsList
+    finalExpression:expression
+    { return h.nodeProgram(imports, [finalExpression], location()); }
+  / imports:importStatementsList
+    { return h.nodeProgram(imports, [], location()); }
+
+importStatementsList = (@importStatement __nl)*
+
+importStatement
+  = _nl 'import' __ file:string variable:(__ 'as' __ @identifier)
+    { return [file, variable]; }
+
+innerBlockOrExpression
+  = quotedInnerBlock
+  / finalExpression:expression
+    { return h.nodeBlock([finalExpression], location()); }
+
+quotedInnerBlock
+  = '{' _nl
+    statements:statementsList
+    finalExpression:(statementSeparator @expression) _nl
+    '}'
+    {
+      if (finalExpression) {
+        statements.push(finalExpression);
+      }
+      return h.nodeBlock(statements, location());
+    }
+  / '{' _nl
+    finalExpression:expression _nl
+    '}'
+    { return h.nodeBlock([finalExpression], location()); }
+
+statementsList = decoratedStatement|1.., statementSeparator|
+
+decoratedStatement
+  = decorator:decorator statement:decoratedStatement
+    {
+      return h.nodeDecoratedStatement(decorator, statement, location())
+    }
+  / letStatement
+  / defunStatement
+
+  decorator
+    = '@' name:dollarIdentifier args:(_ '(' _nl @functionArguments _nl ')')?  __nl
+      {
+        return h.nodeDecorator(name, args ?? [], location());
+      }
+
+statement
+  = decoratedStatement
+  / letStatement
+  / defunStatement
+
+letStatement
+  = exported:("export" __nl)? variable:dollarIdentifier _ assignmentOp _nl value:zeroOMoreArgumentsBlockOrExpression
+    { return h.nodeLetStatement(variable, value, Boolean(exported), location()); }
+
+defunStatement
+  = exported:("export" __nl)? variable:dollarIdentifier '(' _nl args:functionParameters _nl ')' _ assignmentOp _nl body:innerBlockOrExpression
+    {
+      const value = h.nodeLambda(args, body, location(), variable);
+      return h.nodeDefunStatement(variable, value, Boolean(exported), location());
+    }
+
+  assignmentOp "assignment" = '='
+
+functionParameters = functionParameter|.., commaSeparator|
+  functionParameter
+    = id:dollarIdentifier annotation:(_ ':' _nl @expression)?
+      {
+        return annotation ? h.nodeIdentifierWithAnnotation(id.value, annotation, location()) : id;
+      }
+
+/*
+Rules for expressions start here.
+
+Peggy doesn't have built-in support for operator precedence, so we have to recurse into expressions,
+starting from the lowest precedence rules (ternary operators), up to highest precedence rules
+(function calls and field lookups), until we bottom down at atoms and start all over again.
+*/
+
+expression = ifthenelse / ternary / logicalOr
+
+// Ternaries
+
+ifthenelse
+  = 'if' __nl condition:logicalOr
+    __nl 'then' __nl trueExpression:innerBlockOrExpression
+    __nl 'else' __nl falseExpression:(ifthenelse/innerBlockOrExpression)
+    { return h.nodeTernary(condition, trueExpression, falseExpression, 'IfThenElse', location()); }
+
+ternary
+  = condition:logicalOr _ '?' _nl trueExpression:logicalOr _ ':' _nl falseExpression:(ternary / logicalOr)
+    { return h.nodeTernary(condition, trueExpression, falseExpression, 'C', location()); }
+
+// Binary operators
+
+logicalOr
+  = head:logicalAnd tail:(_ @logicalOrOp _nl @logicalAnd)*
+    { return h.makeInfixChain(head, tail, location()); }
+  logicalOrOp "operator" = '||'
+
+logicalAnd
+  = head:equality tail:(_ @logicalAndOp _nl @equality)*
+    { return h.makeInfixChain(head, tail, location()); }
+  logicalAndOp "operator" = '&&'
+
+equality
+  = left:relational _ operator:equalityOp _nl right:relational
+    { return h.nodeInfixCall(operator, left, right, location()); }
+  / relational
+
+  equalityOp "operator" = '==' / '!='
+
+relational
+  = left:credibleInterval _ operator:relationalOp _nl right:credibleInterval
+    { return h.nodeInfixCall(operator, left, right, location()); }
+  / credibleInterval
+
+  relationalOp "operator" = '<=' / '<' / '>=' / '>'
+
+credibleInterval
+  = head:additive tail:(__ @credibleIntervalOp __nl @additive)*
+    { return h.makeInfixChain(head, tail, location()); }
+  credibleIntervalOp "operator" = 'to'
+
+additive
+  = head:multiplicative tail:(_ @additiveOp _nl @multiplicative)*
+    { return h.makeInfixChain(head, tail, location()); }
+  additiveOp "operator" = '+' / '-' / '.+' / '.-'
+
+multiplicative
+  = head:power tail:(_ @multiplicativeOp _nl @power)*
+    { return h.makeInfixChain(head, tail, location()); }
+  multiplicativeOp "operator" = '*' / '/' / '.*' / './'
+
+power
+  = left:chainFunctionCall _ operator:powerOp _nl right:power
+    { return h.nodeInfixCall(operator, left, right, location()); }
+  / chainFunctionCall
+  powerOp "operator" = '^' / '.^'
+
+chainFunctionCall
+  = head:unary tail:(_nl ('->') _nl @chainedFunction)*
+    {
+      return tail.reduce(function(result, element) {
+        return h.nodePipe(result, element.callable, element.args, location());
+      }, head);
+    }
+
+  chainedFunction
+    = fn:callableBasicValue '(' _nl args:functionArguments _nl ')'
+      { return { callable: fn, args }; }
+    / fn:callableBasicValue
+      { return { callable: fn, args: [] }; }
+
+  callableBasicValue = staticCollectionElement / valueConstructor / variable
+
+// Unary operator
+
+unary
+  = unaryOperator:unaryOperator _nl right:(unary/postOperator)
+    { return h.nodeUnaryCall(unaryOperator, right, location())}
+  / postOperator
+
+  unaryOperator "unary operator" = '-' / '.-' / '!'
+
+// Function calls and field lookups
+
+postOperator
+  = collectionElement
+  / atom
+
+staticCollectionElement
+  = head:atom &('['/'.') // should we allow whitespace before the first []?
+    tail:(
+      _ '[' _nl arg:expression  _nl ']' {return {mode: 'bracket', arg}}
+    / '.' arg:$dollarIdentifier {return {mode: 'dot', arg}} // TODO: should we allow whitespace before "."?
+    )*
+    {
+      return tail.reduce(function(result, element) {
+        switch (element.mode) {
+          case 'dot':
+            return h.nodeDotLookup(result, element.arg, location());
+          case 'bracket':
+            return h.nodeBracketLookup(result, element.arg, location());
+          default:
+            throw new Error("Parser implementation error");
+        }
+      }, head);
+    }
+
+collectionElement
+  = head:atom &('['/'('/'.')
+    tail:(
+      _ '(' _nl args:functionArguments _nl ')'
+      { return {mode: 'call', args}; }
+    / _ '[' _nl arg:expression _nl ']'
+      { return {mode: 'bracket', arg}; }
+    / '.' arg:$dollarIdentifier
+      { return {mode: 'dot', arg}; }
+    )*
+    {
+      return tail.reduce(function(result, element) {
+        switch (element.mode) {
+          case 'call':
+            return h.nodeCall(result, element.args, location());
+          case 'dot':
+            return h.nodeDotLookup(result, element.arg, location());
+          case 'bracket':
+            return h.nodeBracketLookup(result, element.arg, location());
+          default:
+            throw new Error("Parser implementation error");
+        }
+      }, head);
+    }
+
+functionArguments = expression|.., commaSeparator|
+
+atom
+  = '(' _nl @expression _nl ')'
+  / basicValue
+
+basicValue = valueConstructor / basicLiteral
+
+// Basic literals such as numbers, strings and booleans
+
+basicLiteral
+  = string
+  / number
+  / boolean
+  / variable
+
+variable = dollarIdentifierWithModule / dollarIdentifier
+
+dollarIdentifierWithModule 'identifier'
+  = head:$moduleIdentifier
+    final:('.' @$dollarIdentifier)?
+    {
+      let modifiers = [head];
+      Boolean(final) && modifiers.push(final);
+      const modifiedIdentifier = modifiers.join('.');
+      return h.nodeIdentifier(modifiedIdentifier, location());
+    }
+  moduleIdentifier 'identifier' = ([A-Z]+[_a-z0-9]i*)
+
+identifier 'identifier'
+  = ([_a-z]+[_a-z0-9]i*) { return h.nodeIdentifier(text(), location()); }
+
+unitIdentifier 'identifier'
+  = 'minutes' / 'hours' / 'days' / 'years' / 'year' / 'n' / 'm' / 'k' / 'M' / 'B' / 'G' / 'T' / 'P' / '%'
+
+dollarIdentifier 'identifier'
+  = ([\$_a-z]+[\$_a-z0-9]i*) { return h.nodeIdentifier(text(), location()); }
+
+escapeSeq 'escape sequence' 
+  = "\\"
+     @( esc:[^u]          { return h.parseEscapeSequence([esc], location(), error) }
+      / esc:("u" . . . .) { return h.parseEscapeSequence(esc, location(), error) }
+      )
+
+string 'string' 
+  = "'" characters:(!("'" / "\\") @. / escapeSeq)* "'" { return h.nodeString(characters.join(""), location()); }
+  / '"' characters:(!('"' / "\\") @. / escapeSeq)* '"' { return h.nodeString(characters.join(""), location()); }
+
+number
+  = number:float unit:unitIdentifier?
+  {
+    if (unit === null) {
+      return number;
+    }
+    else {
+      return h.nodeUnitValue(number, unit, location());
+    }
+  }
+
+float 'number'
+  = significand:floatSignificand exponent:floatExponent?
+    {
+      return h.nodeFloat({
+        integer: significand.integer,
+        fractional: significand.fractional,
+        exponent,
+      }, location());
+    }
+  
+  floatSignificand
+    = integer:intLiteral "." fractional:($d+)?
+      {
+        return {
+          integer,
+          fractional,
+        };
+      }
+    / integer:intLiteral
+      {
+        return {
+          integer,
+          fractional: null,
+        };
+      }
+    / "." fractional:$(d+)
+      {
+        return {
+          integer: 0,
+          fractional,
+        };
+      }
+
+  floatExponent = [e]i @value:signedIntLiteral
+  intLiteral = d+ { return parseInt(text(), 10); }
+  signedIntLiteral = ('-'/'+')? d+ { return parseInt(text(), 10); }
+  d = [0-9]
+
+boolean 'boolean'
+  = ('true' / 'false') ! [a-z]i ! [_$]
+    { return h.nodeBoolean(text() === 'true', location()); }
+
+// Contructors - delimited blocks such as {} and []
+
+valueConstructor
+  = arrayConstructor
+  / lambda
+  / quotedInnerBlock
+  / dictConstructor
+
+lambda
+  = '{' _nl '|' _nl args:functionParameters _nl '|' _nl statements:statementsList  finalExpression: (statementSeparator @expression)  _nl '}'
+    {
+      statements.push(finalExpression);
+      return h.nodeLambda(args, h.nodeBlock(statements, location()), location(), undefined);
+    }
+  / '{' _nl '|' _nl args:functionParameters _nl '|' _nl finalExpression: expression  _nl '}'
+    { return h.nodeLambda(args, finalExpression, location(), undefined); }
+
+arrayConstructor 'array'
+  = '[' _nl ']'
+    { return h.nodeArray([], location()); }
+  / '[' _nl args:array_elements _nl ']'
+    { return h.nodeArray(args, location()); }
+
+  array_elements = @expression|1.., commaSeparator| commaSeparator?
+
+dictConstructor 'dict'
+  = '{' _nl '}'
+    { return h.nodeDict([], location()); }
+  / '{' _nl args:array_dictEntries _nl '}'
+    { return h.nodeDict(args, location()); }
+
+  array_dictEntries = @(
+    keyValuePair
+    / identifier // shorthand
+  )| 1.., commaSeparator|commaSeparator?
+
+  keyValuePair
+    = key:expression _ ':' _nl value:expression
+      { return h.nodeKeyValue(key, value, location()); }
+
+// Separators
+
+_ 'whitespace'
+  = whiteSpaceCharactersOrComment*
+
+_nl 'whitespace'
+  = (whiteSpaceCharactersOrComment / commentOrNewLine)*
+
+__ 'whitespace'
+  = whiteSpaceCharactersOrComment+
+
+__nl 'whitespace'
+  = (whiteSpaceCharactersOrComment / commentOrNewLine)+
+
+statementSeparator ';'
+  = _ (';' / commentOrNewLine)+ _nl
+
+commaSeparator ',' = _ ',' _nl
+
+commentOrNewLine = finalComment? newLine
+  newLine "newline" = [\n\r]
+
+finalComment "line comment"
+  = _ ('//') comment:($([^\r\n]*))
+    { options.comments.push(h.lineComment(comment, location())); }
+
+whiteSpaceCharactersOrComment = whiteSpaceCharacters / delimitedComment
+
+  delimitedComment  "comment"
+    = '/*' comment:($(
+        ([^*] / [*][^/])*
+      )) '*/'
+      { options.comments.push(h.blockComment(comment, location())); }
+
+  whiteSpaceCharacters = [ \t]
+ 
+
+ --- 
+
+ ---
+description: 
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Common
+Functions that work on many different types of values. Also see the experimental [JSON functions](/docs/Api/Danger#json).
+
+{
+  "name": "equal",
+  "description": "Returns true if the two values passed in are equal, false otherwise. Does not work for Squiggle functions, but works for most other types.",
+  "nameSpace": "Common",
+  "requiresNamespace": false,
+  "signatures": [
+    "(any, any) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "=="
+  },
+  "isUnit": false
+}
+
+{
+  "name": "unequal",
+  "nameSpace": "Common",
+  "requiresNamespace": false,
+  "signatures": [
+    "(any, any) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "!="
+  },
+  "isUnit": false
+}
+
+{
+  "name": "typeOf",
+  "description": "Returns the type of the value passed in as a string. This is useful when you want to treat a value differently depending on its type.",
+  "nameSpace": "Common",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "myString = typeOf(\"foo\")\nmyBool = typeOf(true)\nmyDist = typeOf(5 to 10)\nmyFn = typeOf({|e| e})",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(any) => String"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "inspect",
+  "description": "Runs Console.log() in the [Javascript developer console](https://www.digitalocean.com/community/tutorials/how-to-use-the-javascript-developer-console) and returns the value passed in.",
+  "nameSpace": "Common",
+  "requiresNamespace": false,
+  "signatures": [
+    "('A, message?: String) => 'A"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "throw",
+  "description": "Throws a fatal error. There is no way in the language to catch this error.",
+  "nameSpace": "Common",
+  "requiresNamespace": false,
+  "signatures": [
+    "(message: String?) => any"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: 
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Boolean
+
+
+
+{
+  "name": "or",
+  "nameSpace": "Boolean",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Bool, Bool) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "||"
+  },
+  "isUnit": false
+}
+
+{
+  "name": "and",
+  "nameSpace": "Boolean",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Bool, Bool) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "&&"
+  },
+  "isUnit": false
+}
+
+{
+  "name": "not",
+  "nameSpace": "Boolean",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Bool) => Bool"
+  ],
+  "shorthand": {
+    "type": "unary",
+    "symbol": "!"
+  },
+  "isUnit": false
+}
+
+
+---
+description: Dates are a simple date time type.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Date
+A simple date type. Dates are stored as milliseconds since the epoch. They are immutable, and all functions that modify dates return a new date. Used with [Duration](./Duration) values.
+
+    Dates can be useful for modeling values that change over time. Below is a simple example of a function that returns a normal distribution that changes over time, based on the number of years passed since 2020.
+<SquiggleEditor
+defaultCode={`f(t: [Date(2020), Date(2040)]) = {
+  yearsPassed = toYears(t - Date(2020))
+  normal({mean: yearsPassed ^ 2, stdev: yearsPassed^1.3+1})
+}`}/>
+    
+
+## Constructors
+
+{
+  "name": "make",
+  "nameSpace": "Date",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "d1 = Date.make(\"2020-05-12\")\nd2 = Date.make(2020, 5, 10)\nd3 = Date.make(2020.5)",
+      "isInteractive": false,
+      "useForTests": false
+    }
+  ],
+  "signatures": [
+    "(String) => Date",
+    "(year: Number, month: Number, day: Number) => Date",
+    "(year: Number) => Date"
+  ],
+  "isUnit": false
+}
+
+## Conversions
+
+{
+  "name": "fromUnixTime",
+  "nameSpace": "Date",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Date.fromUnixTime(1589222400)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Date"
+  ],
+  "isUnit": false
+}
+{
+  "name": "toUnixTime",
+  "nameSpace": "Date",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Date.toUnixTime(Date.make(2020, 5, 12))",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Date) => Number"
+  ],
+  "isUnit": false
+}
+
+## Algebra
+
+{
+  "name": "subtract",
+  "nameSpace": "Date",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Date.make(2020, 5, 12) - Date.make(2000, 1, 1)",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Date, Date) => Duration"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "-"
+  },
+  "isUnit": false
+}
+{
+  "name": "subtract",
+  "nameSpace": "Date",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Date.make(2020, 5, 12) - Date.make(2000, 1, 1)",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Date, Date) => Duration"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "-"
+  },
+  "isUnit": false
+}
+{
+  "name": "add",
+  "nameSpace": "Date",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Date.make(2020, 5, 12) + 20years",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "20years + Date.make(2020, 5, 12)",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Date, Duration) => Date",
+    "(Duration, Date) => Date"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "+"
+  },
+  "isUnit": false
+}
+
+## Comparison
+
+{
+  "name": "smaller",
+  "nameSpace": "Date",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Date, Date) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "<"
+  },
+  "isUnit": false
+}
+{
+  "name": "larger",
+  "nameSpace": "Date",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Date, Date) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": ">"
+  },
+  "isUnit": false
+}
+{
+  "name": "smallerEq",
+  "nameSpace": "Date",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Date, Date) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "<="
+  },
+  "isUnit": false
+}
+{
+  "name": "largerEq",
+  "nameSpace": "Date",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Date, Date) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": ">="
+  },
+  "isUnit": false
+}
+
+## Other
+
+{
+  "name": "rangeDomain",
+  "nameSpace": "Date",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Date.rangeDomain(Date(2000), Date(2010))",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(min: Date, min: Date) => Domain"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Squiggle dictionaries work similar to Python dictionaries. The syntax is similar to objects in Javascript.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Dict
+Squiggle dictionaries work similar to Python dictionaries. The syntax is similar to objects in Javascript.
+
+## Conversions
+
+{
+  "name": "toList",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.toList({a: 1, b: 2})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict('A)) => List([String, 'A])"
+  ],
+  "isUnit": false
+}
+{
+  "name": "fromList",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.fromList([\n      [\"foo\", 3],\n      [\"bar\", 20],\n    ]) // {foo: 3, bar: 20}",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List([String, 'A])) => Dict('A)"
+  ],
+  "isUnit": false
+}
+
+## Transformations
+
+{
+  "name": "set",
+  "description": "Creates a new dictionary that includes the added element, while leaving the original dictionary unaltered.",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.set({a: 1, b: 2}, \"c\", 3)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict('A), key: String, value: 'A) => Dict('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "delete",
+  "description": "Creates a new dictionary that excludes the deleted element.",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.delete({a: 1, b: 2}, \"a\")",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict('A), key: String) => Dict('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "merge",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "first = { a: 1, b: 2 }\nsnd = { b: 3, c: 5 }\nDict.merge(first, snd)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict(any), Dict(any)) => Dict(any)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "mergeMany",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "first = { a: 1, b: 2 }\nsnd = { b: 3, c: 5 }\nDict.mergeMany([first, snd]) // {a: 1, b: 3, c: 5}",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Dict(any))) => Dict(any)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "map",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.map({a: 1, b: 2}, {|x| x + 1})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict('A), fn: ('A) => 'B) => Dict('B)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "mapKeys",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.mapKeys({a: 1, b: 2, c: 5}, {|x| concat(x, \"-foobar\")})",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict('A), fn: (String) => String) => Dict('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "omit",
+  "description": "Creates a new dictionary that excludes the omitted keys.",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "data = { a: 1, b: 2, c: 3, d: 4 }\nDict.omit(data, [\"b\", \"d\"]) // {a: 1, c: 3}",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict('A), List(String)) => keys: Dict('A)"
+  ],
+  "isUnit": false
+}
+
+## Queries
+
+{
+  "name": "has",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.has({a: 1, b: 2}, \"c\")",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict(any), key: String) => Bool"
+  ],
+  "isUnit": false
+}
+{
+  "name": "size",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.size({a: 1, b: 2})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict(any)) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "keys",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.keys({a: 1, b: 2})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict(any)) => List(String)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "values",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dict.values({ foo: 3, bar: 20 }) // [3, 20]",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict('A)) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "pick",
+  "description": "Creates a new dictionary that only includes the picked keys.",
+  "nameSpace": "Dict",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "data = { a: 1, b: 2, c: 3, d: 4 }\nDict.pick(data, [\"a\", \"c\"]) // {a: 1, c: 3}",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dict('A), keys: List(String)) => Dict('A)"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Distributions are the flagship data type in Squiggle. The distribution type is a generic data type that contains one of three different formats of distributions.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Dist
+Distributions are the flagship data type in Squiggle. The distribution type is a generic data type that contains one of three different formats of distributions.
+
+These subtypes are [point set](/docs/api/DistPointSet), [sample set](/docs/api/DistSampleSet), and [symbolic](/docs/api/Sym). The first two of these have a few custom functions that only work on them. You can read more about the differences between these formats [here](/docs/Discussions/Three-Formats-Of-Distributions).
+
+Several functions below only can work on particular distribution formats. For example, scoring and pointwise math requires the point set format. When this happens, the types are automatically converted to the correct format. These conversions are lossy.
+    
+Distributions are created as [sample sets](/DistSampleSet) by default. To create a symbolic distribution, use `Sym.` namespace: `Sym.normal`, `Sym.beta` and so on.
+
+## Distributions
+
+These are functions for creating primitive distributions. Many of these could optionally take in distributions as inputs. In these cases, Monte Carlo Sampling will be used to generate the greater distribution. This can be used for simple hierarchical models.
+
+See a longer tutorial on creating distributions [here](/docs/Guides/DistributionCreation).
+
+{
+  "name": "make",
+  "nameSpace": "Dist",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dist.make(5)",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Dist.make(normal({p5: 4, p95: 10}))",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dist) => Dist",
+    "(Number) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "mixture",
+  "description": "The ``mixture`` function takes a list of distributions and a list of weights, and returns a new distribution that is a mixture of the distributions in the list. The weights should be positive numbers that sum to 1. If no weights are provided, the function will assume that all distributions have equal weight.\n    \nNote: If you want to pass in over 5 distributions, you must use the list syntax.",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "mixture(1,normal(5,2))",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "mixture(normal(5,2), normal(10,2), normal(15,2), [0.3, 0.5, 0.2])",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "mixture([normal(5,2), normal(10,2), normal(15,2), normal(20,1)], [0.3, 0.5, 0.1, 0.1])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Dist|Number), weights?: List(Number)) => Dist",
+    "(Dist|Number) => Dist",
+    "(Dist|Number, Dist|Number, weights?: [Number, Number]) => Dist",
+    "(Dist|Number, Dist|Number, Dist|Number, weights?: [Number, Number, Number]) => Dist",
+    "(Dist|Number, Dist|Number, Dist|Number, Dist|Number, weights?: [Number, Number, Number, Number]) => Dist",
+    "(Dist|Number, Dist|Number, Dist|Number, Dist|Number, Dist|Number, weights?: [Number, Number, Number, Number, Number]) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "mx",
+  "description": "Alias for mixture()",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "mx(1,normal(5,2))",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Dist|Number), weights?: List(Number)) => Dist",
+    "(Dist|Number) => Dist",
+    "(Dist|Number, Dist|Number, weights?: [Number, Number]) => Dist",
+    "(Dist|Number, Dist|Number, Dist|Number, weights?: [Number, Number, Number]) => Dist",
+    "(Dist|Number, Dist|Number, Dist|Number, Dist|Number, weights?: [Number, Number, Number, Number]) => Dist",
+    "(Dist|Number, Dist|Number, Dist|Number, Dist|Number, Dist|Number, weights?: [Number, Number, Number, Number, Number]) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "normal",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "normal(5,1)",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "normal({p5: 4, p95: 10})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "normal({p10: 4, p90: 10})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "normal({p25: 4, p75: 10})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "normal({mean: 5, stdev: 2})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(mean: Dist|Number, stdev: Dist|Number) => SampleSetDist",
+    "({p5: Number, p95: Number}) => SampleSetDist",
+    "({p10: Number, p90: Number}) => SampleSetDist",
+    "({p25: Number, p75: Number}) => SampleSetDist",
+    "({mean: Number, stdev: Number}) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "lognormal",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "lognormal(0.5, 0.8)",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "lognormal({p5: 4, p95: 10})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "lognormal({p10: 4, p90: 10})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "lognormal({p25: 4, p75: 10})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "lognormal({mean: 5, stdev: 2})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(mu: Dist|Number, sigma: Dist|Number) => SampleSetDist",
+    "({p5: Number, p95: Number}) => SampleSetDist",
+    "({p10: Number, p90: Number}) => SampleSetDist",
+    "({p25: Number, p75: Number}) => SampleSetDist",
+    "({mean: Number, stdev: Number}) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "uniform",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "uniform(10, 12)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(low: Dist|Number, high: Dist|Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "beta",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "beta(20, 25)",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "beta({mean: 0.39, stdev: 0.1})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(alpha: Dist|Number, beta: Dist|Number) => SampleSetDist",
+    "({mean: Number, stdev: Number}) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "cauchy",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "cauchy(5, 1)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(location: Dist|Number, scale: Dist|Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "gamma",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "gamma(5, 1)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(shape: Dist|Number, scale: Dist|Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "logistic",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "logistic(5, 1)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(location: Dist|Number, scale: Dist|Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "to",
+  "description": "The \"to\" function is a shorthand for lognormal({p5:min, p95:max}). It does not accept values of 0 or less, as those are not valid for lognormal distributions.",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "5 to 10",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "to(5,10)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(p5: Dist|Number, p95: Dist|Number) => SampleSetDist"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "to"
+  },
+  "isUnit": false
+}
+{
+  "name": "exponential",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "exponential(2)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(rate: Dist|Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "bernoulli",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "bernoulli(0.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(p: Dist|Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "triangular",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "triangular(3, 5, 10)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(min: Number, mode: Number, max: Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+
+## Basic Functions
+
+{
+  "name": "mean",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "median",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "stdev",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "variance",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "min",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "max",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "mode",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "sample",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "sampleN",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, n: Number) => List(Number)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "exp",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "cdf",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "pdf",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "inv",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "quantile",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "truncate",
+  "description": "Truncates both the left side and the right side of a distribution.\n\nSample set distributions are truncated by filtering samples, but point set distributions are truncated using direct geometric manipulation. Uniform distributions are truncated symbolically. Symbolic but non-uniform distributions get converted to Point Set distributions.",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, left: Number, right: Number) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "truncateLeft",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "truncateRight",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Dist"
+  ],
+  "isUnit": false
+}
+
+## Algebra (Dist)
+
+{
+  "name": "add",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "+"
+  },
+  "isUnit": false
+}
+{
+  "name": "multiply",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "*"
+  },
+  "isUnit": false
+}
+{
+  "name": "subtract",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "-"
+  },
+  "isUnit": false
+}
+{
+  "name": "divide",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "/"
+  },
+  "isUnit": false
+}
+{
+  "name": "pow",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "^"
+  },
+  "isUnit": false
+}
+{
+  "name": "log",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "log",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "log10",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "unaryMinus",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Dist"
+  ],
+  "shorthand": {
+    "type": "unary",
+    "symbol": "-"
+  },
+  "isUnit": false
+}
+
+## Algebra (List)
+
+{
+  "name": "sum",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(List(Dist|Number)) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "product",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(List(Dist|Number)) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "cumsum",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(List(Dist|Number)) => List(Dist)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "cumprod",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(List(Dist|Number)) => List(Dist)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "diff",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(List(Dist|Number)) => List(Dist)"
+  ],
+  "isUnit": false
+}
+
+## Pointwise Algebra
+
+Pointwise arithmetic operations cover the standard arithmetic operations, but work in a different way than the regular operations. These operate on the y-values of the distributions instead of the x-values. A pointwise addition would add the y-values of two distributions.
+
+The infixes `.+`,`.-`, `.*`, `./`, `.^` are supported for their respective operations. `Mixture` works using pointwise addition. 
+
+Pointwise operations work on Point Set distributions, so will convert other distributions to Point Set ones first. Pointwise arithmetic operations typically return unnormalized or completely invalid distributions. For example, the operation{" "} <code>normal(5,2) .- uniform(10,12)</code> results in a distribution-like object with negative probability mass.
+
+{
+  "name": "dotAdd",
+  "nameSpace": "Dist",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "dotMultiply",
+  "nameSpace": "Dist",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "dotSubtract",
+  "nameSpace": "Dist",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "dotDivide",
+  "nameSpace": "Dist",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "dotPow",
+  "nameSpace": "Dist",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Dist, Number) => Dist",
+    "(Number, Dist) => Dist",
+    "(Dist, Dist) => Dist"
+  ],
+  "isUnit": false
+}
+
+## Normalization
+
+There are some situations where computation will return unnormalized distributions. This means that their cumulative sums are not equal to 1.0. Unnormalized distributions are not valid for many relevant functions; for example, klDivergence and scoring.
+
+The only functions that do not return normalized distributions are the pointwise arithmetic operations and the scalewise arithmetic operations. If you use these functions, it is recommended that you consider normalizing the resulting distributions.
+
+{
+  "name": "normalize",
+  "description": "Normalize a distribution. This means scaling it appropriately so that it's cumulative sum is equal to 1. This only impacts Point Set distributions, because those are the only ones that can be non-normlized.",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Dist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "isNormalized",
+  "description": "Check if a distribution is normalized. This only impacts Point Set distributions, because those are the only ones that can be non-normlized. Most distributions are typically normalized, but there are some commands that could produce non-normalized distributions.",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Bool"
+  ],
+  "isUnit": false
+}
+{
+  "name": "integralSum",
+  "description": "Get the sum of the integral of a distribution. If the distribution is normalized, this will be 1.0. This is useful for understanding unnormalized distributions.",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist) => Number"
+  ],
+  "isUnit": false
+}
+
+## Utility
+
+{
+  "name": "sparkline",
+  "description": "\nProduce a sparkline of length ``n``. For example, `▁▁▁▁▁▂▄▆▇██▇▆▄▂▁▁▁▁▁`. These can be useful for testing or quick visualizations that can be copied and pasted into text.",
+  "nameSpace": "Dist",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Dist, Number?) => String"
+  ],
+  "isUnit": false
+}
+
+## Scoring
+
+{
+  "name": "klDivergence",
+  "description": "[Kullback–Leibler divergence](https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence) between two distributions.\n\nNote that this can be very brittle. If the second distribution has probability mass at areas where the first doesn't, then the result will be infinite. Due to numeric approximations, some probability mass in point set distributions is rounded to zero, leading to infinite results with klDivergence.",
+  "nameSpace": "Dist",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dist.klDivergence(Sym.normal(5,2), Sym.normal(5,1.5))",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dist, Dist) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "logScore",
+  "description": "A log loss score. Often that often acts as a [scoring rule](https://en.wikipedia.org/wiki/Scoring_rule). Useful when evaluating the accuracy of a forecast.\n\n    Note that it is fairly slow.",
+  "nameSpace": "Dist",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Dist.logScore({estimate: Sym.normal(5,2), answer: Sym.normal(5.2,1), prior: Sym.normal(5.5,3)})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Dist.logScore({estimate: Sym.normal(5,2), answer: Sym.normal(5.2,1)})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Dist.logScore({estimate: Sym.normal(5,2), answer: 4.5})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({estimate: Dist, answer: Dist|Number, prior?: Dist}) => Number"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: The Sym module provides functions to create some common symbolic distributions.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Sym
+Symbolic Distributions. All these functions match the functions for creating sample set distributions, but produce symbolic distributions instead. Symbolic distributions won't capture correlations, but are more performant than sample distributions.
+
+{
+  "name": "normal",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.normal(5, 1)",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Sym.normal({ p5: 4, p95: 10 })",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Sym.normal({ p10: 4, p90: 10 })",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Sym.normal({ p25: 4, p75: 10 })",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Sym.normal({ mean: 5, stdev: 2 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number) => SymbolicDist",
+    "({p5: Number, p95: Number}) => SymbolicDist",
+    "({p10: Number, p90: Number}) => SymbolicDist",
+    "({p25: Number, p75: Number}) => SymbolicDist",
+    "({mean: Number, stdev: Number}) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "lognormal",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.lognormal(0.5, 0.8)",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Sym.lognormal({ p5: 4, p95: 10 })",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Sym.lognormal({ p10: 4, p90: 10 })",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Sym.lognormal({ p25: 4, p75: 10 })",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Sym.lognormal({ mean: 5, stdev: 2 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number) => SymbolicDist",
+    "({p5: Number, p95: Number}) => SymbolicDist",
+    "({p10: Number, p90: Number}) => SymbolicDist",
+    "({p25: Number, p75: Number}) => SymbolicDist",
+    "({mean: Number, stdev: Number}) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "uniform",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.uniform(10, 12)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "beta",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.beta(20, 25)",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Sym.beta({ mean: 0.39, stdev: 0.1 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number) => SymbolicDist",
+    "({mean: Number, stdev: Number}) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "cauchy",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.cauchy(5, 1)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "gamma",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.gamma(5, 1)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "logistic",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.logistic(5, 1)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "exponential",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.exponential(2)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "bernoulli",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.bernoulli(0.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "pointMass",
+  "description": "Point mass distributions are already symbolic, so you can use the regular `pointMass` function.",
+  "nameSpace": "Sym",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "pointMass(0.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "triangular",
+  "nameSpace": "Sym",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Sym.triangular(3, 5, 10)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number, Number) => SymbolicDist"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Sample set distributions are one of the three distribution formats. Internally, they are stored as a list of numbers.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# SampleSet
+Sample set distributions are one of the three distribution formats. Internally, they are stored as a list of numbers. It's useful to distinguish point set distributions from arbitrary lists of numbers to make it clear which functions are applicable.
+
+Monte Carlo calculations typically result in sample set distributions.
+
+All regular distribution function work on sample set distributions. In addition, there are several functions that only work on sample set distributions.
+
+## Constructors
+
+{
+  "name": "make",
+  "description": "Calls the correct conversion constructor, based on the corresponding input type, to create a sample set distribution",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet(5)",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "SampleSet.make([3,5,2,3,5,2,3,5,2,3,3,5,3,2,3,1,1,3])",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "SampleSet.make({|i| sample(normal(5,2))})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dist) => SampleSetDist",
+    "(Number) => SampleSetDist",
+    "(List(Number)) => SampleSetDist",
+    "((index?: Number) => Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+
+## Conversions
+
+{
+  "name": "fromDist",
+  "description": "Converts any distribution type into a sample set distribution.",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet.fromDist(Sym.normal(5,2))",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dist) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "fromNumber",
+  "description": "Convert a number into a sample set distribution that contains ``n`` copies of that number. ``n`` refers to the model sample count.",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet.fromNumber(3)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "fromList",
+  "description": "Convert a list of numbers into a sample set distribution.",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet.fromList([3,5,2,3,5,2,3,5,2,3,3,5,3,2,3,1,1,3])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "toList",
+  "description": "Gets the internal samples of a sampleSet distribution. This is separate from the ``sampleN()`` function, which would shuffle the samples. ``toList()`` maintains order and length.",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet.toList(SampleSet.fromDist(normal(5,2)))",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(SampleSetDist) => List(Number)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "fromFn",
+  "description": "Convert a function into a sample set distribution by calling it ``n`` times.",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet.fromFn({|i| sample(normal(5,2))})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "((index?: Number) => Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+
+## Transformations
+
+{
+  "name": "map",
+  "description": "Transforms a sample set distribution by applying a function to each sample. Returns a new sample set distribution.",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet.map(SampleSet.fromDist(normal(5,2)), {|x| x + 1})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(SampleSetDist, fn: (Number) => Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "map2",
+  "description": "Transforms two sample set distributions by applying a function to each pair of samples. Returns a new sample set distribution.",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet.map2(\n  SampleSet.fromDist(normal(5,2)),\n  SampleSet.fromDist(normal(5,2)),\n  {|x, y| x + y}\n)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(SampleSetDist, SampleSetDist, fn: (Number, Number) => Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "map3",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet.map3(\n  SampleSet.fromDist(normal(5,2)),\n  SampleSet.fromDist(normal(5,2)),\n  SampleSet.fromDist(normal(5,2)),\n  {|x, y, z| max([x,y,z])}\n)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(SampleSetDist, SampleSetDist, SampleSetDist, fn: (Number, Number, Number) => Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "mapN",
+  "nameSpace": "SampleSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "SampleSet.mapN(\n  [\n    SampleSet.fromDist(normal(5,2)),\n    SampleSet.fromDist(normal(5,2)),\n    SampleSet.fromDist(normal(5,2))\n  ],\n  max\n)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(SampleSetDist), fn: (List(Number)) => Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Point set distributions are one of the three distribution formats. They are stored as a list of x-y coordinates representing both discrete and continuous distributions.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# PointSet
+Point set distributions are one of the three distribution formats. They are stored as a list of x-y coordinates representing both discrete and continuous distributions.
+
+One complication is that it's possible to represent invalid probability distributions in the point set format. For example, you can represent shapes with negative values, or shapes that are not normalized.
+
+## Constructors
+
+{
+  "name": "make",
+  "nameSpace": "PointSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "PointSet.make(normal(5,10))",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "PointSet(3)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dist) => PointSetDist",
+    "(Number) => PointSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "makeContinuous",
+  "nameSpace": "PointSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "PointSet.makeContinuous([\n  {x: 0, y: 0.2},\n  {x: 1, y: 0.7},\n  {x: 2, y: 0.8},\n  {x: 3, y: 0.2}\n])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List({x: Number, y: Number})) => PointSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "makeDiscrete",
+  "nameSpace": "PointSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "PointSet.makeDiscrete([\n  {x: 0, y: 0.2},\n  {x: 1, y: 0.7},\n  {x: 2, y: 0.8},\n  {x: 3, y: 0.2}\n])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List({x: Number, y: Number})) => PointSetDist"
+  ],
+  "isUnit": false
+}
+
+## Conversions
+
+{
+  "name": "fromDist",
+  "description": "Converts the distribution in question into a point set distribution. If the distribution is symbolic, then it does this by taking the quantiles. If the distribution is a sample set, then it uses a version of kernel density estimation to approximate the point set format. One complication of this latter process is that if there is a high proportion of overlapping samples (samples that are exactly the same as each other), it will convert these samples into discrete point masses. Eventually we'd like to add further methods to help adjust this process.",
+  "nameSpace": "PointSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "PointSet.fromDist(normal(5,2))",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Dist) => PointSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "fromNumber",
+  "nameSpace": "PointSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "PointSet.fromNumber(3)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => PointSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "downsample",
+  "nameSpace": "PointSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "PointSet.downsample(PointSet.fromDist(normal(5,2)), 50)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(PointSetDist, newLength: Number) => PointSetDist"
+  ],
+  "isUnit": false
+}
+
+## Transformations
+
+{
+  "name": "mapY",
+  "nameSpace": "PointSet",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "PointSet.mapY(mx(Sym.normal(5,2)), {|x| x + 1})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(PointSetDist, fn: (Number) => Number) => PointSetDist"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Durations are a simple time type, representing a length of time. They are internally stored as milliseconds, but often shown and written using seconds, minutes, hours, days, etc.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Duration
+Durations are a simple time type, representing a length of time. They are internally stored as milliseconds, but often shown and written using seconds, minutes, hours, days, etc. Durations are typically used with [Date](./Date) values.
+
+
+| **Unit Name** | **Example** | **Convert Number to Duration** | **Convert Duration to Number** |
+|---------------|----------------------------|--------------------------------------------|--------------------------------------------|
+| Minute        | `5minutes`                   | `fromMinutes(number)`                      | `toMinutes(duration)`                      |
+| Hour          | `5hour`                     | `fromHours(number)`                        | `toHours(duration)`                        |
+| Day           | `5days`                      | `fromDays(number)`                         | `toDays(duration)`                         |
+| Year          | `5years`                     | `fromYears(number)`                        | `toYears(duration)`                        |
+
+
+## Constructors
+
+{
+  "name": "fromMinutes",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Duration.fromMinutes(5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Duration"
+  ],
+  "isUnit": false
+}
+{
+  "name": "fromHours",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Duration.fromHours(5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Duration"
+  ],
+  "isUnit": false
+}
+{
+  "name": "fromDays",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Duration.fromDays(5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Duration"
+  ],
+  "isUnit": false
+}
+{
+  "name": "fromYears",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Duration.fromYears(5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Duration"
+  ],
+  "isUnit": false
+}
+
+## Conversions
+
+{
+  "name": "toMinutes",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Duration.toMinutes(5minutes)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "toHours",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Duration.toHours(5minutes)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "toDays",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Duration.toDays(5minutes)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "toYears",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Duration.toYears(5minutes)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration) => Number"
+  ],
+  "isUnit": false
+}
+
+## Algebra
+
+{
+  "name": "unaryMinus",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "-5minutes",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration) => Duration"
+  ],
+  "shorthand": {
+    "type": "unary",
+    "symbol": "-"
+  },
+  "isUnit": false
+}
+{
+  "name": "add",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "5minutes + 10minutes",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration, Duration) => Duration"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "+"
+  },
+  "isUnit": false
+}
+{
+  "name": "subtract",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "5minutes - 10minutes",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration, Duration) => Duration"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "-"
+  },
+  "isUnit": false
+}
+{
+  "name": "multiply",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "5minutes * 10",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "10 * 5minutes",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration, Number) => Duration",
+    "(Number, Duration) => Duration"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "*"
+  },
+  "isUnit": false
+}
+{
+  "name": "divide",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "5minutes / 2minutes",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration, Duration) => Number"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "/"
+  },
+  "isUnit": false
+}
+{
+  "name": "divide",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "5minutes / 2minutes",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Duration, Duration) => Number"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "/"
+  },
+  "isUnit": false
+}
+
+## Comparison
+
+{
+  "name": "smaller",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Duration, Duration) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "<"
+  },
+  "isUnit": false
+}
+{
+  "name": "larger",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Duration, Duration) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": ">"
+  },
+  "isUnit": false
+}
+{
+  "name": "smallerEq",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Duration, Duration) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "<="
+  },
+  "isUnit": false
+}
+{
+  "name": "largerEq",
+  "nameSpace": "Duration",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Duration, Duration) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": ">="
+  },
+  "isUnit": false
+}
+
+
+---
+description: Lists are a simple data structure that can hold any type of value. They are similar to arrays in Javascript or lists in Python.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# List
+Lists are a simple data structure that can hold any type of value. They are similar to arrays in Javascript or lists in Python.
+
+```squiggle
+myList = [1, 2, 3, normal(5,2), "hello"]
+```
+
+Lists are immutable, meaning that they cannot be modified. Instead, all list functions return a new list.
+
+## Constructors
+
+{
+  "name": "make",
+  "description": "Creates an array of length `count`, with each element being `value`. If `value` is a function, it will be called `count` times, with the index as the argument.",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.make(2, 3)",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "List.make(2, {|| 3})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "List.make(2, {|index| index+1})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(count: Number, fn: (index?: Number) => 'A) => List('A)",
+    "(count: Number, value: 'A) => List('A)",
+    "(SampleSetDist) => List(Number)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "upTo",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.upTo(1,4)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(low: Number, high: Number) => List(Number)"
+  ],
+  "isUnit": false
+}
+
+## Modifications
+
+{
+  "name": "reverse",
+  "nameSpace": "List",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "List.reverse([1,4,5]) // [5,4,1]",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A)) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "concat",
+  "nameSpace": "List",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "List.concat([1,2,3], [4, 5, 6])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), List('A)) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "sortBy",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.sortBy([{a:3}, {a:1}], {|f| f.a})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), fn: ('A) => Number) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "append",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.append([1,4],5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), 'A) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "join",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.join([\"a\", \"b\", \"c\"], \",\") // \"a,b,c\"",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(String), separator?: String) => String",
+    "(List(String)) => String"
+  ],
+  "isUnit": false
+}
+{
+  "name": "flatten",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.flatten([[1,2], [3,4]])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(any)) => List(any)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "shuffle",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.shuffle([1,3,4,20])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A)) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "zip",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.zip([1,3,4,20], [2,4,5,6])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), List('B)) => List(['A, 'B])"
+  ],
+  "isUnit": false
+}
+{
+  "name": "unzip",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.unzip([[1,2], [2,3], [4,5]])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(['A, 'B])) => [List('A), List('B)]"
+  ],
+  "isUnit": false
+}
+
+## Filtering
+
+{
+  "name": "slice",
+  "description": "Returns a copy of the list, between the selected ``start`` and ``end``, end not included. Directly uses the [Javascript implementation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/slice) underneath.",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.slice([1,2,5,10],1,3)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), startIndex: Number, endIndex?: Number) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "uniq",
+  "description": "Filters the list for unique elements. Works on select Squiggle types.",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.uniq([1,2,3,\"hi\",false,\"hi\"])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A)) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "uniqBy",
+  "description": "Filters the list for unique elements. Works on select Squiggle types.",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.uniqBy([[1,5], [3,5], [5,7]], {|x| x[1]})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), ('A) => 'B) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "filter",
+  "nameSpace": "List",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "List.filter([1,4,5], {|x| x>3})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), fn: ('A) => Bool) => List('A)"
+  ],
+  "isUnit": false
+}
+
+## Queries
+
+{
+  "name": "length",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.length([1,4,5])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(any)) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "first",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.first([1,4,5])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A)) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "last",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.last([1,4,5])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A)) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "minBy",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.minBy([{a:3}, {a:1}], {|f| f.a})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), fn: ('A) => Number) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "maxBy",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.maxBy([{a:3}, {a:1}], {|f| f.a})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), fn: ('A) => Number) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "every",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.every([1,4,5], {|el| el>3 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), fn: ('A) => Bool) => Bool"
+  ],
+  "isUnit": false
+}
+{
+  "name": "some",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.some([1,4,5], {|el| el>3 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), fn: ('A) => Bool) => Bool"
+  ],
+  "isUnit": false
+}
+{
+  "name": "find",
+  "description": "Returns an error if there is no value found",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.find([1,4,5], {|el| el>3 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), fn: ('A) => Bool) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "findIndex",
+  "description": "Returns `-1` if there is no value found",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "List.findIndex([1,4,5], {|el| el>3 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), fn: ('A) => Bool) => Number"
+  ],
+  "isUnit": false
+}
+
+## Functional Transformations
+
+{
+  "name": "map",
+  "nameSpace": "List",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "List.map([1,4,5], {|x| x+1})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "List.map([1,4,5], {|x,i| x+i+1})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), ('A, index?: Number) => 'B) => List('B)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "reduce",
+  "description": "Applies `f` to each element of `arr`. The function `f` has two main paramaters, an accumulator and the next value from the array. It can also accept an optional third `index` parameter.",
+  "nameSpace": "List",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "List.reduce([1,4,5], 2, {|acc, el| acc+el})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('B), initialValue: 'A, callbackFn: (accumulator: 'A, currentValue: 'B, currentIndex?: Number) => 'A) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "reduceReverse",
+  "description": "Works like `reduce`, but the function is applied to each item from the last back to the first.",
+  "nameSpace": "List",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "List.reduceReverse([1,4,5], 2, {|acc, el| acc-el})",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('B), initialValue: 'A, callbackFn: (accumulator: 'A, currentValue: 'B) => 'A) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "reduceWhile",
+  "description": "Works like `reduce`, but stops when the condition is no longer met. This is useful, in part, for simulating processes that need to stop based on the process state.\n    ",
+  "nameSpace": "List",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "// Adds first two elements, returns `11`.\nList.reduceWhile([5, 6, 7], 0, {|acc, curr| acc + curr}, {|acc| acc < 15})\n",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "// Adds first two elements, returns `{ x: 11 }`.\nList.reduceWhile(\n  [5, 6, 7],\n  { x: 0 },\n  {|acc, curr| { x: acc.x + curr }},\n  {|acc| acc.x < 15}\n)\n",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('B), initialValue: 'A, callbackFn: (accumulator: 'A, currentValue: 'B) => 'A, conditionFn: ('A) => Bool) => 'A"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Simple constants and functions for math in Squiggle.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Math
+
+## Constants
+
+| Variable Name    | Number Name                                                                      | Value                |
+|------------------|----------------------------------------------------------------------------------|----------------------|
+| `Math.e`       | Euler's number                                                                   | ≈ 2.718281828459045  |
+| `Math.ln2`     | Natural logarithm of 2                                                           | ≈ 0.6931471805599453 |
+| `Math.ln10`    | Natural logarithm of 10                                                          | ≈ 2.302585092994046  |
+| `Math.log2e`   | Base 2 logarithm of E                                                            | ≈ 1.4426950408889634 |
+| `Math.log10e`  | Base 10 logarithm of E                                                           | ≈ 0.4342944819032518 |
+| `Math.pi`      | Pi - ratio of the circumference to the diameter of a circle                      | ≈ 3.141592653589793  |
+| `Math.sqrt1_2` | Square root of 1/2                                                               | ≈ 0.7071067811865476 |
+| `Math.sqrt2`   | Square root of 2                                                                 | ≈ 1.4142135623730951 |
+| `Math.phi`     | Phi is the golden ratio.                                                         | 1.618033988749895    |
+| `Math.tau`     | Tau is the ratio constant of a circle's circumference to radius, equal to 2 * pi | 6.283185307179586    |
+
+## Functions
+  
+
+{
+  "name": "sqrt",
+  "nameSpace": "Math",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "sin",
+  "nameSpace": "Math",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "cos",
+  "nameSpace": "Math",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "tan",
+  "nameSpace": "Math",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "asin",
+  "nameSpace": "Math",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "acos",
+  "nameSpace": "Math",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "atan",
+  "nameSpace": "Math",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: 
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Plot
+The Plot module provides functions to create plots of distributions and functions.
+
+Raw functions and distributions are plotted with default parameters, while plot objects created by functions from this module give you more control over chart parameters and access to more complex charts.
+
+{
+  "name": "dist",
+  "nameSpace": "Plot",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Plot.dist(\n  normal(5, 2),\n  {\n    xScale: Scale.linear({ min: -2, max: 6, title: \"X Axis Title\" }),\n    showSummary: true,\n  }\n)",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(dist: Dist, params?: {xScale?: Scale, yScale?: Scale, showSummary?: Bool}) => Plot"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "dists",
+  "nameSpace": "Plot",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Plot.dists(\n{\n  dists: [\n    { name: \"First Dist\", value: normal(0, 1) },\n    { name: \"Second Dist\", value: uniform(2, 4) },\n  ],\n  xScale: Scale.symlog({ min: -2, max: 5 }),\n}\n)",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(dists: List(Dist|Number)|List({name?: String, value: Dist|Number}), {xScale?: Scale, yScale?: Scale, showSummary?: Bool}?) => Plot"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "numericFn",
+  "nameSpace": "Plot",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Plot.numericFn(\n  {|t|t ^ 2},\n  { xScale: Scale.log({ min: 1, max: 100 }), points: 10 }\n)",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(fn: (Number) => Number, params?: {xScale?: Scale, yScale?: Scale, xPoints?: List(Number)}) => Plot"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "distFn",
+  "nameSpace": "Plot",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Plot.distFn(\n  {|t|normal(t, 2) * normal(5, 3)},\n  {\n    xScale: Scale.log({ min: 3, max: 100, title: \"Time (years)\" }),\n    yScale: Scale.linear({ title: \"Value\" }),\n    distXScale: Scale.linear({ tickFormat: \"#x\" }),\n  }\n)",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(fn: (Number) => Dist, params?: {xScale?: Scale, yScale?: Scale, distXScale?: Scale, xPoints?: List(Number)}) => Plot"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "scatter",
+  "nameSpace": "Plot",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "xDist = SampleSet.fromDist(2 to 5)\nyDist = normal({p5:-3, p95:3}) * 5 - xDist ^ 2\nPlot.scatter({\n  xDist: xDist,\n  yDist: yDist,\n  xScale: Scale.log({min: 1.5}),\n})",
+      "isInteractive": true,
+      "useForTests": true
+    },
+    {
+      "text": "xDist = SampleSet.fromDist(normal({p5:-2, p95:5}))\nyDist = normal({p5:-3, p95:3}) * 5 - xDist\nPlot.scatter({\n  xDist: xDist,\n  yDist: yDist,\n  xScale: Scale.symlog({title: \"X Axis Title\"}),\n  yScale: Scale.symlog({title: \"Y Axis Title\"}),\n})",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({xDist: SampleSetDist, yDist: SampleSetDist, xScale?: Scale, yScale?: Scale}) => Plot"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Squiggle numbers are Javascript floats.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Number
+Squiggle numbers are Javascript floats.
+
+## Comparison
+
+{
+  "name": "smaller",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Number, Number) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "<"
+  },
+  "isUnit": false
+}
+{
+  "name": "larger",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Number, Number) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": ">"
+  },
+  "isUnit": false
+}
+{
+  "name": "smallerEq",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Number, Number) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "<="
+  },
+  "isUnit": false
+}
+{
+  "name": "largerEq",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Number, Number) => Bool"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": ">="
+  },
+  "isUnit": false
+}
+
+## Algebra (Number)
+
+{
+  "name": "add",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Number, Number) => Number"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "+"
+  },
+  "isUnit": false
+}
+{
+  "name": "subtract",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Number, Number) => Number"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "-"
+  },
+  "isUnit": false
+}
+{
+  "name": "multiply",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Number, Number) => Number"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "*"
+  },
+  "isUnit": false
+}
+{
+  "name": "divide",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Number, Number) => Number"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "/"
+  },
+  "isUnit": false
+}
+{
+  "name": "pow",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "signatures": [
+    "(Number, Number) => Number"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "^"
+  },
+  "isUnit": false
+}
+
+## Functions (Number)
+
+{
+  "name": "unaryMinus",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "exp(3.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "shorthand": {
+    "type": "unary",
+    "symbol": "-"
+  },
+  "isUnit": false
+}
+{
+  "name": "exp",
+  "description": "exponent",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "exp(3.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "log",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "log(3.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "log10",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "log10(3.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "log2",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "log2(3.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "floor",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "floor(3.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "ceil",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "ceil(3.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "abs",
+  "description": "absolute value",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "abs(3.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "round",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "round(3.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+
+## Algebra (List)
+
+{
+  "name": "sum",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "sum([3,5,2])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "product",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "product([3,5,2])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "cumprod",
+  "description": "cumulative product",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "cumprod([3,5,2,3,5])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => List(Number)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "diff",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "diff([3,5,2,3,5])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => List(Number)"
+  ],
+  "isUnit": false
+}
+
+## Functions (List)
+
+{
+  "name": "min",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "min([3,5,2])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => Number",
+    "(Number, Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "max",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "max([3,5,2])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => Number",
+    "(Number, Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "mean",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "mean([3,5,2])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "quantile",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "quantile([1,5,10,40,2,4], 0.3)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number), Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "median",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "median([1,5,10,40,2,4])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "geomean",
+  "description": "geometric mean",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "geomean([3,5,2])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "stdev",
+  "description": "standard deviation",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "stdev([3,5,2,3,5])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "variance",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "variance([3,5,2,3,5])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "sort",
+  "nameSpace": "Number",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "sort([3,5,2,3,5])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List(Number)) => List(Number)"
+  ],
+  "isUnit": false
+}
+
+## Utils
+
+{
+  "name": "rangeDomain",
+  "nameSpace": "Number",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Number.rangeDomain(5, 10)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(min: Number, max: Number) => Domain"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Scales for plots.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Scale
+Chart axes in [plots](./Plot.mdx) can be scaled using the following functions. Each scale function accepts optional min and max value. Power scale accepts an extra exponent parameter.
+
+Squiggle uses D3 for the tick formats. You can read about d3 tick formats [here](https://github.com/d3/d3-format).
+
+## Numeric Scales
+
+{
+  "name": "linear",
+  "nameSpace": "Scale",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Scale.linear({ min: 3, max: 10 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({min?: Number, max?: Number, tickFormat?: String, title?: String}) => Scale",
+    "() => Scale"
+  ],
+  "isUnit": false
+}
+{
+  "name": "log",
+  "nameSpace": "Scale",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Scale.log({ min: 1, max: 100 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({min?: Number, max?: Number, tickFormat?: String, title?: String}) => Scale",
+    "() => Scale"
+  ],
+  "isUnit": false
+}
+{
+  "name": "symlog",
+  "description": "Symmetric log scale. Useful for plotting data that includes zero or negative values.\n\nThe function accepts an additional `constant` parameter, used as follows: `Scale.symlog({constant: 0.1})`. This parameter allows you to allocate more pixel space to data with lower or higher absolute values. By adjusting this constant, you effectively control the scale's focus, shifting it between smaller and larger values. For more detailed information on this parameter, refer to the [D3 Documentation](https://d3js.org/d3-scale/symlog).\n    \nThe default value for `constant` is `0.0001`.",
+  "nameSpace": "Scale",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Scale.symlog({ min: -10, max: 10 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({min?: Number, max?: Number, tickFormat?: String, title?: String, constant?: Number}) => Scale",
+    "() => Scale"
+  ],
+  "isUnit": false
+}
+{
+  "name": "power",
+  "description": "Power scale. Accepts an extra `exponent` parameter, like, `Scale.power({exponent: 2, min: 0, max: 100})`.\n\nThe default value for `exponent` is `0.1`.",
+  "nameSpace": "Scale",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Scale.power({ min: 1, max: 100, exponent: 0.1 })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({min?: Number, max?: Number, tickFormat?: String, title?: String, exponent?: Number}) => Scale",
+    "() => Scale"
+  ],
+  "isUnit": false
+}
+
+## Date Scales
+
+{
+  "name": "date",
+  "description": "Only works on Date values. Is a linear scale under the hood.",
+  "nameSpace": "Scale",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Scale.date({ min: Date(2022), max: Date(2025) })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({min?: Date, max?: Date, tickFormat?: String, title?: String}) => Scale",
+    "() => Scale"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Functions for working with strings in Squiggle
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# String
+Strings support all JSON escape sequences, with addition of escaped single-quotes (for single-quoted strings)
+
+~~~squiggle
+a = "'\" NUL:\u0000"
+b = '\'" NUL:\u0000'
+~~~
+
+{
+  "name": "make",
+  "description": "Converts any value to a string. Some information is often lost.",
+  "nameSpace": "String",
+  "requiresNamespace": true,
+  "signatures": [
+    "(any) => String"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "concat",
+  "nameSpace": "String",
+  "requiresNamespace": false,
+  "signatures": [
+    "(String, String) => String",
+    "(String, any) => String"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "add",
+  "nameSpace": "String",
+  "requiresNamespace": false,
+  "signatures": [
+    "(String, String) => String",
+    "(String, any) => String"
+  ],
+  "shorthand": {
+    "type": "infix",
+    "symbol": "+"
+  },
+  "isUnit": false
+}
+
+{
+  "name": "split",
+  "nameSpace": "String",
+  "requiresNamespace": true,
+  "signatures": [
+    "(String, separator: String) => List(String)"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Tables are a simple date time type.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Table
+The Table module allows you to make simple tables for displaying data.
+
+{
+  "name": "make",
+  "nameSpace": "Table",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Table.make(\n  [\n    { name: \"First Dist\", value: normal(0, 1) },\n    { name: \"Second Dist\", value: uniform(2, 4) },\n    { name: \"Third Dist\", value: uniform(5, 6) },\n  ],\n  {\n    columns: [\n      { name: \"Name\", fn: {|d|d.name} },\n      { name: \"Mean\", fn: {|d|mean(d.value)} },\n      { name: \"Std Dev\", fn: {|d|variance(d.value)} },\n      { name: \"Dist\", fn: {|d|d.value} },\n    ],\n  }\n)",
+      "isInteractive": true,
+      "useForTests": true
+    },
+    {
+      "text": "Table.make(\n  [\n    { name: \"First Dist\", value: Sym.lognormal({ p5: 1, p95: 10 }) },\n    { name: \"Second Dist\", value: Sym.lognormal({ p5: 5, p95: 30 }) },\n    { name: \"Third Dist\", value: Sym.lognormal({ p5: 50, p95: 90 }) },\n  ],\n  {\n    columns: [\n      { name: \"Name\", fn: {|d|d.name} },\n      {\n        name: \"Plot\",\n        fn: {\n          |d|\n          Plot.dist(\n            {\n              dist: d.value,\n              xScale: Scale.log({ min: 0.5, max: 100 }),\n              showSummary: false,\n            }\n          )\n        },\n      },\n    ],\n  }\n)",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(data: List('A), params: {columns: List({fn: ('A) => any, name?: String})}) => Table"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: 
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# System
+## Constants
+
+### System.version
+Returns the current version of Squiggle.
+
+## Functions
+
+
+{
+  "name": "sampleCount",
+  "description": "The number of samples set in the current environment. This variable can be modified in the Squiggle playground settings.",
+  "nameSpace": "System",
+  "requiresNamespace": true,
+  "signatures": [
+    "() => Number"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: The Tag module handles tags, which allow the additions of metadata to Squiggle variables.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Tag
+Tags are metadata that can be added to Squiggle variables. They are used to add additional information to variables, such as names, descriptions, and visualization options. While tags can be accessed at runtime, they are primarily meant for use with the Squiggle Playground and other visualizations.
+Tags can be added to variables either by using their name `Tag.get[Name]` or by using decorators.
+
+## List of Tags
+| Tag Name    | Description |
+| --------- | ----------- |
+| `name` | Change the default display name for the variable, in the playground.       |
+| `doc` | Adds documentation to the variable in the playground.       |
+| `showAs` | Change the default view for the value when displayed. |
+| `format` | Format a number, date, or duration when displayed. |
+| `notebook` | Formats lists as notebooks. |
+| `hide` | Don't show the variable in the playground |
+
+## Example
+<SquiggleEditor
+defaultCode={`@name("My Great Function") // Decorator syntax to add a name tag
+@doc("This is an example function.")
+@showAs(Calculator) // Show this as a simple calculator in the Playground
+exampleFn(f) = f^2
+  
+myVarTags = Tag.getAll(exampleFn)
+  
+docs = Tag.getDoc(exampleFn)
+  
+@hide // Hide this variable in the Playground
+helperFn(f) = f `}/>
+
+
+## Tags
+
+{
+  "name": "name",
+  "description": "Adds a user-facing name to a value. This is useful for documenting what a value represents, or how it was calculated.\n\n*Note: While names are shown in the sidebar, you still need to call variables by their regular variable names in code.*",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "('A, String) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "getName",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "(any) => String"
+  ],
+  "isUnit": false
+}
+{
+  "name": "doc",
+  "description": "Adds text documentation to a value. This is useful for documenting what a value represents or how it was calculated.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "('A, String) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "getDoc",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "(any) => String"
+  ],
+  "isUnit": false
+}
+{
+  "name": "showAs",
+  "description": "Overrides the default visualization for a value.\n`showAs()` can take either a visualization, or a function that calls the value and returns a visualization.\n\nDifferent types of values can be displayed in different ways. The following table shows the potential visualization types for each input type. In this table, `Number` can be used with Dates and Durations as well.  \n| **Input Type**                      | **Visualization Types**               |\n| ----------------------------------- | ------------------------------------- |\n| **Distribution**                    | `Plot.dist`                         |\n| **List**                            | `Table`                             |\n| **`(Number -> Number)` Function** | `Plot.numericFn`, `Calculator`    |\n| **`(Number -> Dist)` Function**   | `Plot.distFn`, `Calculator`       |\n| **Function**                        | `Calculator`                        |\n",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "example1 = ({|x| x + 1}) -> Tag.showAs(Calculator)\n@showAs({|f| Plot.numericFn(f, { xScale: Scale.symlog() })})\nexample2 = {|x| x + 1}",
+      "isInteractive": true,
+      "useForTests": false
+    }
+  ],
+  "signatures": [
+    "(Dist, Plot|(Dist) => Plot) => Dist",
+    "(List(any), Table|(List(any)) => Table) => List(any)",
+    "((Number) => Dist|Number, Plot|Calculator|((Number) => Dist|Number) => Plot|Calculator) => (Number) => Dist|Number",
+    "((Date) => Dist|Number, Plot|Calculator|((Date) => Dist|Number) => Plot|Calculator) => (Date) => Dist|Number",
+    "((Duration) => Dist|Number, Plot|Calculator|((Duration) => Dist|Number) => Plot|Calculator) => (Duration) => Dist|Number",
+    "(Function, Calculator|(Function) => Calculator) => Function"
+  ],
+  "isUnit": false
+}
+{
+  "name": "getShowAs",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "(any) => any"
+  ],
+  "isUnit": false
+}
+{
+  "name": "getExportData",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "(any) => any"
+  ],
+  "isUnit": false
+}
+{
+  "name": "format",
+  "description": "Set the display format for a number, distribution, duration, or date. Uses the [d3-format](https://d3js.org/d3-format) syntax on numbers and distributions, and the [d3-time-format](https://d3js.org/d3-time-format) syntax for dates.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "(Dist|Number, numberFormat: String) => Dist|Number",
+    "(Duration, numberFormat: String) => Duration",
+    "(Date, timeFormat: String) => Date"
+  ],
+  "isUnit": false
+}
+{
+  "name": "getFormat",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "examples": [],
+  "signatures": [
+    "(Dist|Number) => String",
+    "(Duration) => String",
+    "(Date) => String"
+  ],
+  "isUnit": false
+}
+{
+  "name": "hide",
+  "description": "Hides a value when displayed under Variables. This is useful for hiding intermediate values or helper functions that are used in calculations, but are not directly relevant to the user. Only hides top-level variables.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "('A, Bool) => 'A",
+    "('A) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "getHide",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "(any) => Bool"
+  ],
+  "isUnit": false
+}
+{
+  "name": "startOpen",
+  "description": "When the value is first displayed, it will begin open in the viewer. Refresh the page to reset.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "('A) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "startClosed",
+  "description": "When the value is first displayed, it will begin collapsed in the viewer. Refresh the page to reset.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "('A) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "getStartOpenState",
+  "description": "Returns the startOpenState of a value, which can be \"open\", \"closed\", or \"\" if no startOpenState is set. Set using `Tag.startOpen` and `Tag.startClosed`.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "(any) => String"
+  ],
+  "isUnit": false
+}
+{
+  "name": "notebook",
+  "description": "Displays the list of values as a notebook. This means that element indices are hidden, and the values are displayed in a vertical list. Useful for displaying combinations of text and values.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Calculator.make(\n  {|f, contents| f ? Tag.notebook(contents) : contents},\n  {\n    description: \"Shows the contents as a notebook if the checkbox is checked.\",\n    inputs: [\n      Input.checkbox({ name: \"Show as Notebook\", default: true }),\n      Input.textArea(\n        {\n          name: \"Contents to show\",\n          default: \"[\n  \\\"## Distribution 1\\\",\n  normal(5, 2),\n  \\\"## Distribution 1\\\",\n  normal(20, 1),\n  \\\"This is an opening section. Here is more text.\n\\\",\n]\",\n        }\n      ),\n    ],\n  }\n)",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), Bool) => List('A)",
+    "(List('A)) => List('A)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "getNotebook",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "(any) => Bool"
+  ],
+  "isUnit": false
+}
+
+## Functions
+
+{
+  "name": "getAll",
+  "description": "Returns a dictionary of all tags on a value.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "(any) => Dict(any)"
+  ],
+  "isUnit": false
+}
+{
+  "name": "omit",
+  "description": "Returns a copy of the value with the specified tags removed.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "('A, List(String)) => 'A"
+  ],
+  "isUnit": false
+}
+{
+  "name": "clear",
+  "description": "Returns a copy of the value with all tags removed.",
+  "nameSpace": "Tag",
+  "requiresNamespace": true,
+  "signatures": [
+    "('A) => 'A"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: The Calculator module helps you create custom calculators
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Calculator
+
+The Calculator module allows you to make custom calculators for functions. This is a form that's tied to a specific Squiggle function, where the inputs to the form are passed to that function, and the output of the function gets shown on the bottom.
+
+Calculators can be useful for debugging functions or to present functions to end users.
+
+
+{
+  "name": "make",
+  "description": "\n`Calculator.make` takes in a function, a description, and a list of inputs. The function should take in the same number of arguments as the number of inputs, and the arguments should be of the same type as the default value of the input.\n\nInputs are created using the `Input` module. The Input module has a few different functions for creating different types of inputs.\n    \nFor calculators that take a long time to run, we recommend setting `autorun` to `false`. This will create a button that the user can click to run the calculator.\n    ",
+  "nameSpace": "Calculator",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Calculator.make(\n{|text, textArea, select, checkbox| text + textArea},\n{\n  title: \"My example calculator\",\n  inputs: [\n    Input.text({ name: \"text\", default: \"20\" }),\n    Input.textArea({ name: \"textArea\", default: \"50 to 80\" }),\n    Input.select({ name: \"select\", default: \"second\", options: [\"first\", \"second\", \"third\"] }),\n    Input.checkbox({ name: \"checkbox\", default: true }),\n  ],\n  sampleCount: 10k,\n})",
+      "isInteractive": true,
+      "useForTests": true
+    },
+    {
+      "text": "// When a calculator is created with only a function, it will guess the inputs based on the function's parameters. It won't provide default values if it's a user-written function.\n\n({|x| x * 5}) -> Calculator",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({fn: Function, title?: String, description?: String, inputs?: List(Input), autorun?: Bool, sampleCount?: Number}) => Calculator",
+    "(Function, params?: {title?: String, description?: String, inputs?: List(Input), autorun?: Bool, sampleCount?: Number}) => Calculator"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Inputs are now only used for describing forms for calculators.
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Input
+Inputs are now only used for describing forms for [calculators](./Calculator.mdx).
+
+{
+  "name": "text",
+  "description": "Creates a single-line input. This input can be used for all Squiggle types.",
+  "nameSpace": "Input",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Input.text({ name: \"First\", default: \"John\" })",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Input.text({ name: \"Number of X in Y\", default: '20 to 300' })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({name: String, description?: String, default?: Number|String}) => Input"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "textArea",
+  "description": "Creates a multi-line input, sized with the provided input. This input can be used for all Squiggle types.",
+  "nameSpace": "Input",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Input.textArea({ name: \"people\", default: '{\n  \"John\": 20 to 50, \n  \"Mary\": 30 to 90,\n}' })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({name: String, description?: String, default?: Number|String}) => Input"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "checkbox",
+  "description": "Creates a checkbox input. Used for Squiggle booleans.",
+  "nameSpace": "Input",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Input.checkbox({ name: \"IsTrue?\", default: true })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({name: String, description?: String, default?: Bool}) => Input"
+  ],
+  "isUnit": false
+}
+
+{
+  "name": "select",
+  "description": "Creates a dropdown input. Used for Squiggle strings.",
+  "nameSpace": "Input",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Input.select({ name: \"Name\", default: \"Sue\", options: [\"John\", \"Mary\", \"Sue\"] })",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({name: String, description?: String, options: List(String), default?: String}) => Input"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: 
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# RelativeValues
+*Warning: Relative value functions are particularly experimental and subject to change.*
+
+{
+  "name": "gridPlot",
+  "nameSpace": "RelativeValues",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "RelativeValues.gridPlot({\n  ids: [\"foo\", \"bar\"],\n  fn: {|id1, id2| [SampleSet.fromDist(2 to 5), SampleSet.fromDist(3 to 6)]},\n})",
+      "isInteractive": true,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "({ids: List(String), fn: (String, String) => List(Number)}) => Plot"
+  ],
+  "isUnit": false
+}
+
+
+---
+description: Newer experimental functions which are less stable than Squiggle as a whole
+---
+import { FnDocumentationFromName } from "@quri/squiggle-components";
+import { SquiggleEditor }  from "../../../components/SquiggleEditor";
+
+
+# Danger
+The Danger library contains newer experimental functions which are less stable than Squiggle as a whole. They are not recommended for production use, but are useful for testing out new ideas., 
+
+
+## JSON
+
+
+The JSON module provides JSON-like objects in Squiggle. ``Danger.json`` is mainly useful for debugging, and ``Danger.jsonString`` is useful for sending data to other systems. A simple example is shown below.
+
+We have custom serializers for different Squiggle objects. Note that this API is unstable and might change over time.
+
+<SquiggleEditor
+defaultCode={`sampleSet = 30 to 50
+pointSet = Sym.normal(5, 2)
+plot = Plot.dists([sampleSet, pointSet])
+fn(e) = e
+
+@notebook
+result = [
+  "### Danger.json()",
+  Danger.json([sampleSet, pointSet, plot, fn]),
+  "### Danger.jsonString",
+  // We don't show sampleSet or plot below because they would be too large, but feel free to try that out
+  Danger.jsonString([pointSet, fn]),
+]
+result
+`}/>
+
+{
+  "name": "json",
+  "description": "Converts a value to a simpler form, similar to JSON. This is useful for debugging. Keeps functions and dates, but converts objects like distributions, calculators, and plots to combinations of dictionaries and lists.",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.json({a: 1, b: 2})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Danger.json([2 to 5, Sym.normal(5, 2), Calculator({|x| x + 1})])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(any) => any"
+  ],
+  "isUnit": false
+}
+{
+  "name": "jsonString",
+  "description": "Converts a value to a stringified JSON, similar to JSON.stringify() in Javasript. Replaces functions with dict summaries.",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.jsonString({a: 1, b: 2})",
+      "isInteractive": false,
+      "useForTests": true
+    },
+    {
+      "text": "Danger.jsonString([2 to 5, Sym.normal(5, 2), Calculator({|x| x + 1})])",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(any) => String"
+  ],
+  "isUnit": false
+}
+
+## Javascript
+
+Near 1-1 matches of Javascript functions.
+
+{
+  "name": "parseFloat",
+  "description": "Converts a string to a number. If the string can't be converted, returns `Parse Failed`. Calls Javascript `parseFloat` under the hood.",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.parseFloat('10.3')",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(String) => Number|String"
+  ],
+  "isUnit": false
+}
+{
+  "name": "now",
+  "description": "Returns the current date. Internally calls ``Date.now()`` in JavaScript.  \n\n*Caution: This function, which returns the current date, produces varying outputs with each call. As a result, accurately estimating the value of functions that incorporate ``Danger.now()`` at past time points is challenging. In the future, we intend to implement a feature allowing the input of a simulated time via an environment variable to address this issue.*",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.now()",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "() => Date"
+  ],
+  "isUnit": false
+}
+
+## Math
+
+{
+  "name": "laplace",
+  "description": "Calculates the probability implied by [Laplace's rule of succession](https://en.wikipedia.org/wiki/Rule_of_succession)",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "trials = 10\nsuccesses = 1\nDanger.laplace(successes, trials) //  (successes + 1) / (trials + 2)  = 2 / 12 = 0.1666",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number) => Number"
+  ],
+  "isUnit": false
+}
+
+## Combinatorics
+
+{
+  "name": "factorial",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.factorial(20)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "choose",
+  "description": "`Danger.choose(n,k)` returns `factorial(n) / (factorial(n - k) * factorial(k))`, i.e., the number of ways you can choose k items from n choices, without repetition. This function is also known as the [binomial coefficient](https://en.wikipedia.org/wiki/Binomial_coefficient).",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.choose(1, 20)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "binomial",
+  "description": "`Danger.binomial(n, k, p)` returns `choose((n, k)) * pow(p, k) * pow(1 - p, n - k)`, i.e., the probability that an event of probability p will happen exactly k times in n draws.",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.binomial(1, 20, 0.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(Number, Number, Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "combinations",
+  "description": "Returns all combinations of the input list taken r elements at a time.",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.combinations([1, 2, 3], 2) // [[1, 2], [1, 3], [2, 3]]",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A), Number) => List(List('A))"
+  ],
+  "isUnit": false
+}
+{
+  "name": "allCombinations",
+  "description": "Returns all possible combinations of the elements in the input list.",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.allCombinations([1, 2, 3]) // [[1], [2], [3], [1, 2], [1, 3], [2, 3], [1, 2, 3]]",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(List('A)) => List(List('A))"
+  ],
+  "isUnit": false
+}
+
+## Distributions
+
+{
+  "name": "binomialDist",
+  "description": "A binomial distribution.\n\n``n`` must be above 0, and ``p`` must be between 0 and 1. \n\nNote: The binomial distribution is a discrete distribution. When representing this, the Squiggle distribution component might show it as partially or fully continuous. This is a visual mistake; if you inspect the underlying data, it should be discrete.",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.binomialDist(8, 0.5)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(numberOfTrials: Dist|Number, probabilityOfSuccess: Dist|Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+{
+  "name": "poissonDist",
+  "description": "A Poisson distribution.\n\nNote: The Poisson distribution is a discrete distribution. When representing this, the Squiggle distribution component might show it as partially or fully continuous.  This is a visual mistake; if you inspect the underlying data, it should be discrete.",
+  "nameSpace": "Danger",
+  "requiresNamespace": true,
+  "examples": [
+    {
+      "text": "Danger.poissonDist(10)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(rate: Dist|Number) => SampleSetDist"
+  ],
+  "isUnit": false
+}
+
+## Integration
+
+{
+  "name": "integrateFunctionBetweenWithNumIntegrationPoints",
+  "description": "Integrates the function `f` between `min` and `max`, and computes `numIntegrationPoints` in between to do so.\n\nNote that the function `f` has to take in and return numbers. To integrate a function which returns distributions, use:\n\n~~~squiggle\nauxiliaryF(x) = mean(f(x))\n\nDanger.integrateFunctionBetweenWithNumIntegrationPoints(auxiliaryF, min, max, numIntegrationPoints)\n~~~\n",
+  "nameSpace": "Danger",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Danger.integrateFunctionBetweenWithNumIntegrationPoints({|x| x+1}, 1, 10, 10)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(f: Function, min: Number, max: Number, numIntegrationPoints: Number) => Number"
+  ],
+  "isUnit": false
+}
+{
+  "name": "integrateFunctionBetweenWithEpsilon",
+  "description": "Integrates the function `f` between `min` and `max`, and uses an interval of `epsilon` between integration points when doing so. This makes its runtime less predictable than `integrateFunctionBetweenWithNumIntegrationPoints`, because runtime will not only depend on `epsilon`, but also on `min` and `max`.\n\nSame caveats as `integrateFunctionBetweenWithNumIntegrationPoints` apply.",
+  "nameSpace": "Danger",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Danger.integrateFunctionBetweenWithEpsilon({|x| x+1}, 1, 10, 0.1)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(f: Function, min: Number, max: Number, epsilon: Number) => Number"
+  ],
+  "isUnit": false
+}
+
+## Optimization
+
+{
+  "name": "optimalAllocationGivenDiminishingMarginalReturnsForManyFunctions",
+  "description": "Computes the optimal allocation of $`funds` between `f1` and `f2`. For the answer given to be correct, `f1` and `f2` will have to be decreasing, i.e., if `x > y`, then `f_i(x) < f_i(y)`.",
+  "nameSpace": "Danger",
+  "requiresNamespace": false,
+  "examples": [
+    {
+      "text": "Danger.optimalAllocationGivenDiminishingMarginalReturnsForManyFunctions(\n  [\n    {|x| x+1},\n    {|y| 10}\n  ],\n  100,\n  0.01\n)",
+      "isInteractive": false,
+      "useForTests": true
+    }
+  ],
+  "signatures": [
+    "(fs: List(Function), funds: Number, approximateIncrement: Number) => any"
+  ],
+  "isUnit": false
+}
