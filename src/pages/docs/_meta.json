@@ -1,4 +1,9 @@
 {
-  "Guides": "Guides",
-  "Changelog": "Changelog"
+  "Introduction": "Introduction",
+  "FAQ": "FAQ",
+  "Theory": "Theory",
+  "Modeling": "Modeling",
+  "FunctionReference": "Function Reference",
+  "Organizations": "Organizations",
+  "ReleaseNotes": "Release Notes"
 }
