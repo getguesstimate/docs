@@ -20,7 +20,7 @@ Guesstimate can convert your confidence interval into three different possible f
 
 1.  [Normal Distributions](https://en.wikipedia.org/wiki/Normal_distribution):
     This should be used when you think that values near the center of your range are more likely than values near the
-    edges of your range, and values outside your range are possible, but increasingly unlikely.  Guesstimate interprets
+    edges of your range, and values outside your range are possible, but increasingly unlikely. Guesstimate interprets
     your input as a 90% CI distributed symmetrically about the mean.
 2.  [Uniform Distributions](https://en.wikipedia.org/wiki/Uniform_distribution_(continuous\): This should be used when
     you are 100% certain that the value would fall within your range, and it is equally likely it would fall anywhere
@@ -29,13 +29,13 @@ Guesstimate can convert your confidence interval into three different possible f
 3.  [Lognormal Distributions](https://en.wikipedia.org/wiki/Log-normal_distribution):
     This should be used when your value must be positive, and is more likely near the left edge of your range than the
     right, but has a long tail of possibility to the right (more specifically, when values are symmetrically likely on
-    the log scale across the multiplicative center of your range).  Guesstimate interprets your input as a 90% CI with
-    your left endpoint at the 5th percentile and your right at the 95th percentile.  For lognormal, both endpoints of
+    the log scale across the multiplicative center of your range). Guesstimate interprets your input as a 90% CI with
+    your left endpoint at the 5th percentile and your right at the 95th percentile. For lognormal, both endpoints of
     your confidence interval must be positive.
 
 ##### Proportions
 
-![Proportions are entered with the syntax 1 in 5](../assets/Proportion Image.png)
+![Proportions are entered with the syntax 1 in 5](/img/docs/Proportion-Image.png)
 
 Guesstimate can also convert your estimates of proportionality into a
 [beta distribution](https://en.wikipedia.org/wiki/Beta_distribution), which is designed to work well for estimates of
@@ -43,7 +43,7 @@ proportions/percentages. To enter a proportion, simply express the proportion vi
 `1 of 5`, `3 in 10`).
 
 When you say '1 of 5', Guesstimate will generate a distribution between 0 and 1 centered around 0.2, with uncertainty
-reflective of the precision in your estimate (e.g.  `1 of 5` will have more uncertainty than `200 of 1000`).
+reflective of the precision in your estimate (e.g. `1 of 5` will have more uncertainty than `200 of 1000`).
 
 ##### Functions (=)
 

@@ -17,17 +17,17 @@ const config = {
     </div>
   ),
   project: {
-    link: "https://github.com/quantified-uncertainty/squiggle",
+    link: "https://github.com/getguesstimate/guesstimate-app",
   },
   useNextSeoProps() {
     const { asPath } = useRouter();
     return {
-      titleTemplate: asPath === "/" ? "Squiggle" : "%s | Squiggle",
+      titleTemplate: asPath === "/" ? "Guesstimate" : "%s | Guesstimate",
     };
   },
   head: () => {
     const { asPath } = useRouter();
-    const url = `https://squiggle-language.com${asPath}`;
+    const url = `https://docs.getguesstimate.com${asPath}`;
 
     // Nextra automatically injects og:title and og:description.
     // og:title is based on _meta.json; og:description comes from frontmatter.
@@ -45,7 +45,7 @@ const config = {
   nextThemes: {
     forcedTheme: "light",
   },
-  primaryHue: 17,
+  primaryHue: 210,
   docsRepositoryBase:
     "https://github.com/quantified-uncertainty/squiggle/blob/main/packages/website",
 } satisfies DocsThemeConfig;

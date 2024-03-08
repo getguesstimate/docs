@@ -7,7 +7,7 @@ venture, predict the amount of time completing a big project will take, or exper
 have used it to optimize video games, understand lottery payoffs, and estimate the costs of childcare.
 
 Guesstimate is most commonly used for cost estimation and forecasting within small companies. If you're not sure how
-Guesstimate can help you or your business, contact us at <ozzie@getguesstimate.com> to set up a free consultation
+Guesstimate can help you or your business, contact us at <hello@quantifieduncertainty.org> to set up a free consultation
 session to analyze your modeling needs.
 
 #### What are some good examples?
@@ -29,8 +29,8 @@ Additionally, you can find a list of the available functions while modeling by c
 on the right, then clicking **Functions: Available Existing Functions**.
 
 The documentation widget is located here:
-![the documentation widget](./assets/Documentation Widget.png)
-![the function documentation section](./assets/Function Documentation.png)
+![the documentation widget](/img/docs/Documentation-Widget.png)
+![the function documentation section](/img/docs/Function-Documentation.png)
 
 #### Can I edit someone else's model?
 
@@ -49,7 +49,7 @@ Ball when you want to do more detailed analysis.
 
 #### Who is behind Guesstimate?
 
-Ozzie Gooen and Matthew McDermott.
+[The Quantified Uncertainty Research Institute](https://quantifieduncertainty.org/) is now behind Guesstimate.
 
 #### Is it open source?
 
@@ -57,13 +57,13 @@ Yes. You can check out the [GitHub repo](https://github.com/getguesstimate/guess
 
 #### Where can I find more information on Guesstimate?
 
-We have a blog [here](https://medium.com/guesstimate-blog).
+See the QURI website [here](https://quantifieduncertainty.org/). We occasionally have posts about Guesstimate.
 
 #### I found a bug!
 
 Please file it in our bug tracker on [GitHub](https://github.com/getguesstimate/guesstimate-app), or just open up chat
-(bottom right) and let us know. If your bug is security related, please alert us immediately at
-[matthew@getguesstimate.com](mailto:matthew@getguesstimate.com).
+(bottom right) and let us know. If your bug is security related, please alert us at
+[support@quantifieduncertainty.org](mailto:support@quantifieduncertainty.org).
 
 # Math Related Questions
 

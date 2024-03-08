@@ -1,7 +1,7 @@
 {
   "overview": "Overview",
   "operators": "Operators",
-  "existing_functions": "Existing Functions",
-  "financial_functions": "Financial Functions",
-  "distributions": "Distributions"
+  "existing_functions": "Functions",
+  "distributions": "Distributions",
+  "finance_functions": "Finance Functions"
 }

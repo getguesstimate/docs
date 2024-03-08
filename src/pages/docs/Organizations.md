@@ -9,4 +9,4 @@ Organizations can also store [facts](facts.md), which are named variables you ca
 To create an organization, log in, then click on the user menu in the top right, then click on the 'New Organization'
 option, or navigate directly to [the new organization page](https://www.getguesstimate.com/organizations/new)
 
-![New Organization Page](assets/New Organization.png)
+![New Organization Page](/img/docs/New-Organization.png)

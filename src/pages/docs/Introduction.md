@@ -5,7 +5,7 @@ similar to other spreadsheet tools, such as Excel or Google Sheets. Each model i
 be filled with a name and value. Functions can be used to connect cells together to represent more complex quantities.
 
 For example, a simple model of how many piano tuners there are in Boston might look like this:
-![Example Model](./assets/Example Cells.png)
+![Example Model](/img/docs/Example-Cells.png)
 
 #### Use Numbers With Uncertainty
 
@@ -19,7 +19,7 @@ that instead of there being 100,000 pianos in boston, there are somewhere betwee
 We can also add some custom data to our pianos per tuner estimate by polling all of our piano tuner friends to see how
 many pianos they service, then entering their responses as a comma or enter separated list directly into the cell.
 
-![Example Model with Uncertainty](./assets/Ranges & Data.png)
+![Example Model with Uncertainty](/img/docs/Ranges-&-Data.png)
 
 #### Share Your Results
 
@@ -32,6 +32,3 @@ the model, but their changes won't be saved. You can browse all our existing pub
 Private models are only visible to their creator, and private
 organizational models are visible to everyone within the owning organization. Private models & private organizational
 models are only available on our [paid plans](https://www.getguesstimate.com/pricing).
-
-#### Short Demo
-<iframe width="560" height="315" src="https://www.youtube.com/embed/_fZdBq0TOPk" frameborder="0" allowfullscreen></iframe>
