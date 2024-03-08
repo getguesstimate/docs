@@ -1,9 +1,12 @@
 {
-  "Introduction": "Introduction",
-  "FAQ": "FAQ",
-  "Theory": "Theory",
-  "Modeling": "Modeling",
-  "FunctionReference": "Function Reference",
-  "Organizations": "Organizations",
-  "ReleaseNotes": "Release Notes"
+  "introduction": "Introduction",
+  "faq": "FAQ",
+  "theory": "Theory",
+  "basic_modeling": "Modeling",
+  "calculators": "Calculators",
+  "functions": "Function Reference",
+  "organizations": "Organizations",
+  "global_metrics": "Global Metrics",
+  "organizational_metrics": "Organization Metrics",
+  "release_notes": "Release Notes"
 }
