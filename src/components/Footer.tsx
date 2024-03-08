@@ -1,4 +1,5 @@
 import { FC } from "react";
+
 import { FaDiscord, FaGithub, FaRss } from "react-icons/fa";
 
 const linkClasses = "items-center flex hover:text-gray-900";
@@ -9,8 +10,12 @@ const linkClasses = "items-center flex hover:text-gray-900";
 export const Footer: FC = () => {
   const externalLinkSection = (
     <div className="flex flex-col space-y-2">
+      <a href={"https://quantifieduncertainty.org/"} className={linkClasses}>
+        <FaRss size="1em" className="mr-2" />
+        The Quantified Uncertainty Research Institute
+      </a>
       <a
-        href={"https://github.com/quantified-uncertainty/squiggle"}
+        href={"https://github.com/getguesstimate/guesstimate-app"}
         className={linkClasses}
       >
         <FaGithub size="1em" className="mr-2" />
@@ -19,10 +24,6 @@ export const Footer: FC = () => {
       <a href={"https://discord.gg/nsTnQTgtG6"} className={linkClasses}>
         <FaDiscord size="1em" className="mr-2" />
         Discord
-      </a>
-      <a href={"https://quri.substack.com/t/squiggle"} className={linkClasses}>
-        <FaRss size="1em" className="mr-2" />
-        Newsletter
       </a>
     </div>
   );
