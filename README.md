@@ -31,3 +31,4 @@ Clean up the build artefacts:
 ```sh
 pnpm clean
 ```
+cats
