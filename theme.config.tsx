@@ -1,21 +1,10 @@
-/* eslint-disable react-hooks/rules-of-hooks */
-import Image from "next/image";
 import { useRouter } from "next/router";
 import { DocsThemeConfig } from "nextra-theme-docs";
 
 import { Footer } from "./src/components/Footer";
 
 const config = {
-  logo: (
-    <div className="flex gap-2">
-      <Image
-        src="/img/guesstimate-logo.png"
-        width={130}
-        height={30}
-        alt="Guesstimate logo"
-      />
-    </div>
-  ),
+  logo: <div className="font-bold">Guesstimate Documentation</div>,
   project: {
     link: "https://github.com/getguesstimate/guesstimate-app",
   },
@@ -40,14 +29,12 @@ const config = {
   footer: {
     text: <Footer />,
   },
-  // squiggle components are not compatible with dark mode yet, see https://github.com/quantified-uncertainty/squiggle/issues/1192
   darkMode: false,
   nextThemes: {
     forcedTheme: "light",
   },
   primaryHue: 210,
-  docsRepositoryBase:
-    "https://github.com/quantified-uncertainty/squiggle/blob/main/packages/website",
+  docsRepositoryBase: "https://github.com/getguesstimate/guesstimate-docs",
 } satisfies DocsThemeConfig;
 
 export default config;

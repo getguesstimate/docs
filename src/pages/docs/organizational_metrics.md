@@ -1,4 +1,6 @@
-# Organizational Metrics
+# Organization Metrics
+
+_Update: Organization metrics are experimental and might be removed in the future. We suggest you experiment with them, but don't become dependent on them. If you want to have complicated workflows with some models that import the results of others, we recommend you consider [Squiggle](https://www.squiggle-language.com/)._
 
 Have a few similar metrics that are used in multiple sheets? You can use organization metrics to have some constants that will be
 similar among all of your organization's models.
